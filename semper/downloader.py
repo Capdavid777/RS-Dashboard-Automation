@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError
 
 SEMPER_URL = "https://web-prod.semper-services.com/auth"
 DEF_TIMEOUT = 30000  # 30s
@@ -13,9 +13,6 @@ def first_last_day(month: str):
     start = datetime(y, m, 1)
     end = (start + relativedelta(months=1) - relativedelta(days=1))
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
-
-def _click(scope, selector): scope.locator(selector).first.click(timeout=DEF_TIMEOUT)
-def _fill(scope, selector, value): scope.locator(selector).first.fill(value, timeout=DEF_TIMEOUT)
 
 def _snapshot(page, out_dir, tag):
     try:
@@ -34,28 +31,27 @@ def _force_type_input(page, locator, text):
     except: pass
     try: locator.fill("")
     except: pass
-    try: locator.type(str(text), delay=40)
+    try: locator.type(str(text), delay=35)
     except: pass
     try:
         page.evaluate("(el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}", locator, str(text))
     except: pass
     try: page.keyboard.press("Tab")
     except: pass
-    page.wait_for_timeout(120)
+    page.wait_for_timeout(100)
 
 def _do_login(page, venue, username, password, out_dir):
     page.goto(SEMPER_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, "after-load")
 
-    # first 3 inputs (Venue, Username, Password)
+    # get first 3 inputs (Venue, Username, Password)
     inputs = page.locator('form >> input:not([type="hidden"])').all()
     if len(inputs) < 3:
         inputs = page.locator('input:not([type="hidden"])').all()
     if len(inputs) < 3:
         _snapshot(page, out_dir, "missing-inputs")
         raise RuntimeError(f"Login page did not expose 3 inputs (found {len(inputs)}).")
-
     v_inp, u_inp = inputs[0], inputs[1]
     try:
         p_inp = page.locator('input[type="password"]').first
@@ -74,30 +70,30 @@ def _do_login(page, venue, username, password, out_dir):
     _snapshot(page, out_dir, "after-login")
 
 def _open_all_reports_via_menu(page, out_dir):
-    """Reach All Reports by hovering/clicking top menu only."""
+    # Hover top tabs until “All Reports” appears, then click
     top_tabs = [
-        'text=General', 'text=Reservations', 'text=Front Desk', 'text=Accounting',
-        'text=Setup & Admin', 'text=Calendar View', 'text=Channel Management'
+        'text=General','text=Reservations','text=Front Desk','text=Accounting',
+        'text=Setup & Admin','text=Calendar View','text=Channel Management'
     ]
-    candidates_all_reports = [
-        'text=All Reports', 'a:has-text("All Reports")', 'li:has-text("All Reports")', 'button:has-text("All Reports")'
+    candidates = [
+        'text=All Reports','a:has-text("All Reports")','li:has-text("All Reports")','button:has-text("All Reports")'
     ]
 
-    # Already visible?
-    for sel in candidates_all_reports:
+    # already visible?
+    for sel in candidates:
         try:
-            if page.locator(sel).first.is_visible():
-                page.locator(sel).first.click(timeout=DEF_TIMEOUT)
+            loc = page.locator(sel).first
+            if loc.is_visible():
+                loc.click(timeout=DEF_TIMEOUT)
                 _snapshot(page, out_dir, "after-open-all-reports")
                 return
         except: pass
 
-    # Hover each tab until All Reports appears
     for tab in top_tabs:
         try:
             page.locator(tab).first.hover(timeout=DEF_TIMEOUT)
-            page.wait_for_timeout(300)
-            for sel in candidates_all_reports:
+            page.wait_for_timeout(250)
+            for sel in candidates:
                 try:
                     loc = page.locator(sel).first
                     if loc.is_visible():
@@ -111,47 +107,49 @@ def _open_all_reports_via_menu(page, out_dir):
     _snapshot(page, out_dir, "could-not-find-all-reports")
     raise RuntimeError("Could not reach 'All Reports' from the top menu.")
 
-def _open_report_by_name(page, name, out_dir):
+def _dblclick_report_right_panel(page, report_text, out_dir):
     """
-    On the 'All Reports' screen, double-click a report by its visible text on the RIGHT column.
-    If not found, use the search box, then double-click the item in the LEFT list and click 'Add >>' first.
+    The right panel has headers (e.g., 'History & Forecast') and items under them.
+    We aggressively locate the element by text and double-click it, with fallbacks.
     """
-    # 1) Try double-click directly in the right column
+    # 1) Most direct: find visible text anywhere and double-click
     try:
-        right_pane = page.locator('div:has-text("History & Forecast")').last
-        target = right_pane.get_by_text(name, exact=False).first
-        target.scroll_into_view_if_needed()
-        target.dblclick(timeout=DEF_TIMEOUT)
+        item = page.get_by_text(report_text, exact=True).first
+        item.scroll_into_view_if_needed()
+        item.click(button="left", click_count=2, timeout=DEF_TIMEOUT)
+        _snapshot(page, out_dir, "after-dblclick-report")
         return
     except Exception:
         pass
 
-    # 2) Use the search box to find it in the left list, add to right, then double-click
+    # 2) Prefer the right column area (near 'History & Forecast')
     try:
-        search = page.get_by_placeholder("Search All Reports", exact=False).first
-        search.click(); search.fill(""); search.type(name, delay=20)
-        page.wait_for_timeout(400)
-        left_item = page.locator("div").filter(has_text=name).first
-        left_item.scroll_into_view_if_needed()
-        left_item.click()
-        add_btn = page.get_by_role("button", name="Add >>", exact=False).first
-        add_btn.click()
-        page.wait_for_timeout(300)
-        # Now in the right pane—double-click it
-        right_item = page.locator("div").filter(has_text=name).nth(1)
-        right_item.scroll_into_view_if_needed()
-        right_item.dblclick(timeout=DEF_TIMEOUT)
+        right = page.locator("xpath=//div[contains(., 'History & Forecast')]").last
+        target = right.get_by_text(report_text, exact=True).first
+        target.scroll_into_view_if_needed()
+        target.click(button="left", click_count=2, timeout=DEF_TIMEOUT)
+        _snapshot(page, out_dir, "after-dblclick-report")
         return
     except Exception:
-        _snapshot(page, out_dir, "report-not-found")
-        raise RuntimeError(f"Couldn't open report '{name}'")
+        pass
+
+    # 3) Loose (case-insensitive) match inside any right-side container
+    try:
+        target = page.locator(f"xpath=//*[contains(normalize-space(.), '{report_text}')]").first
+        box = target.bounding_box()
+        if box:
+            page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
+            page.mouse.dblclick()
+            _snapshot(page, out_dir, "after-dblclick-report")
+            return
+    except Exception:
+        pass
+
+    _snapshot(page, out_dir, "report-dblclick-failed")
+    raise RuntimeError(f"Could not double-click '{report_text}'")
 
 def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
-    """
-    Handles the standard Semper date modal → Generate → No → Export To Excel.
-    Tries multiple input names/placeholders commonly used on Semper reports.
-    """
-    # Date inputs in the popup
+    # Common selectors in Semper’s date/Generate modal flow
     date_from_sel = (
         'input[name="fromDate"], input[name="startDate"], input[placeholder*="Start" i], input[placeholder*="From" i]'
     )
@@ -162,8 +160,8 @@ def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
     no_sel = 'button:has-text("No"), text=No'
     export_sel = 'text=Export To Excel, a:has-text("Export To Excel"), button:has-text("Export To Excel"), button:has-text("Export")'
 
-    # Fill dates
-    page.locator(date_from_sel).first.wait_for(state="visible", timeout=DEF_TIMEOUT)
+    # Wait for date inputs to appear (the report should open in the same tab)
+    page.wait_for_selector(date_from_sel, timeout=DEF_TIMEOUT)
     _force_type_input(page, page.locator(date_from_sel).first, start)
     _force_type_input(page, page.locator(date_to_sel).first, end)
 
@@ -171,9 +169,9 @@ def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
     page.locator(generate_sel).first.click(timeout=DEF_TIMEOUT)
     page.wait_for_timeout(300)
 
-    # Optional "No" prompt
+    # Optional "No"
     try:
-        page.locator(no_sel).first.click(timeout=2000)
+        page.locator(no_sel).first.click(timeout=1500)
     except Exception:
         pass
 
@@ -181,15 +179,15 @@ def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
     page.locator(export_sel).first.wait_for(state="visible", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, f"{filename_hint}-ready-to-export")
 
-    # Download
-    with page.expect_download(timeout=120000) as dl_info:
+    # Download file
+    with page.expect_download(timeout=120000) as dl:
         page.locator(export_sel).first.click()
-    download = dl_info.value
-    out_path = os.path.join("outputs", "raw", f"{filename_hint}.xlsx")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    download.save_as(out_path)
-    print(f"✅ Saved: {out_path}")
-    return out_path
+    download = dl.value
+    dest = os.path.join("outputs", "raw", f"{filename_hint}.xlsx")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    download.save_as(dest)
+    print(f"✅ Saved: {dest}")
+    return dest
 
 def download_all_reports(month: str, out_dir: str):
     load_dotenv()
@@ -206,8 +204,7 @@ def download_all_reports(month: str, out_dir: str):
     if not venue:
         raise RuntimeError("SEMPER_VENUE_ID is empty. Set it in .env")
 
-    files = {}
-    error = None
+    files, error = {}, None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headful, slow_mo=slowmo_ms if slowmo_ms > 0 else None)
@@ -215,19 +212,19 @@ def download_all_reports(month: str, out_dir: str):
         page = context.new_page()
 
         try:
-            # Login
+            # 1) Login
             _do_login(page, venue, username, password, out_dir)
 
-            # Open "All Reports"
+            # 2) Open All Reports
             _open_all_reports_via_menu(page, out_dir)
 
-            # === 1) Room Types History and Forecast ===
-            _open_report_by_name(page, "Room Types History and Forecast", out_dir)
+            # 3) Double-click the exact item in your screenshot
+            _dblclick_report_right_panel(page, "Room Types History and Forecast", out_dir)
+
+            # 4) Fill dates, Generate → No, Export
             files["history_forecast"] = _fill_dates_generate_export(
                 page, start, end, out_dir, f"{month}-history-forecast"
             )
-
-            # (next reports to follow here — we’ll wire them after this succeeds)
 
         except Exception as e:
             error = e
