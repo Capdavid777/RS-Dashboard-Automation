@@ -14,11 +14,8 @@ def first_last_day(month: str):
     end = (start + relativedelta(months=1) - relativedelta(days=1))
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
-def _click(scope, selector):
-    scope.locator(selector).first.click(timeout=DEF_TIMEOUT)
-
-def _fill(scope, selector, value):
-    scope.locator(selector).first.fill(value, timeout=DEF_TIMEOUT)
+def _click(scope, selector): scope.locator(selector).first.click(timeout=DEF_TIMEOUT)
+def _fill(scope, selector, value): scope.locator(selector).first.fill(value, timeout=DEF_TIMEOUT)
 
 def _export(page, out_dir, filename_hint):
     with page.expect_download(timeout=60000) as dl_info:
@@ -37,88 +34,147 @@ def _find_in_any_frame(page, selectors):
                 if loc.count() > 0:
                     loc.wait_for(state="attached", timeout=DEF_TIMEOUT)
                     return f, sel
-            except PWTimeout:
-                continue
             except Exception:
                 continue
     return None, None
 
 def _all_visible_text_inputs(page):
-    # Find all visible non-password inputs in DOM order (page + iframes)
     frames = [page] + page.frames
     locs = []
     for f in frames:
         try:
-            elems = f.locator('input:not([type="password"])').all()
-            for e in elems:
+            for e in f.locator('input:not([type="password"])').all():
                 try:
-                    if e.is_visible():
-                        locs.append((f, e))
+                    if e.is_visible(): locs.append((f, e))
                 except Exception:
-                    continue
+                    pass
         except Exception:
-            continue
+            pass
     return locs
 
-def _do_login(page, company, username, password, headful=False):
+def _do_login(page, company, username, password):
     page.goto(SEMPER_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
-    # 1) Company / Property code
+    # 1) Company / property code
     scope_co, co_sel = _find_in_any_frame(page, LOGIN["company_any"])
-    if co_sel:
-        _fill(scope_co, co_sel, company)
+    if co_sel: _fill(scope_co, co_sel, company)
     else:
-        # Fallback: first visible text input is company
-        text_inputs = _all_visible_text_inputs(page)
-        if not text_inputs:
-            raise RuntimeError("No visible text inputs found on login page.")
-        f0, e0 = text_inputs[0]
-        e0.fill(company)
+        ti = _all_visible_text_inputs(page)
+        if not ti: raise RuntimeError("No visible text inputs on login page.")
+        ti[0][1].fill(company)
 
     # 2) Username
     scope_user, user_sel = _find_in_any_frame(page, LOGIN["username_any"])
-    if user_sel:
-        _fill(scope_user, user_sel, username)
+    if user_sel: _fill(scope_user, user_sel, username)
     else:
-        # Fallback: second visible text input (after company) is username
-        text_inputs = _all_visible_text_inputs(page)
-        if len(text_inputs) < 2:
-            raise RuntimeError("Username field not found on login page.")
-        f1, e1 = text_inputs[1]
-        e1.fill(username)
+        ti = _all_visible_text_inputs(page)
+        if len(ti) < 2: raise RuntimeError("Username field not found.")
+        ti[1][1].fill(username)
 
     # 3) Password
     scope_pw, pw_sel = _find_in_any_frame(page, LOGIN["password_any"])
-    if not pw_sel:
-        raise RuntimeError("Password field not found on login page.")
+    if not pw_sel: raise RuntimeError("Password field not found.")
     _fill(scope_pw, pw_sel, password)
 
     # Submit
     scope_btn, submit_sel = _find_in_any_frame(page, LOGIN["submit_any"])
-    if not submit_sel:
-        raise RuntimeError("Login button not found on login page.")
+    if not submit_sel: raise RuntimeError("Login button not found.")
     _click(scope_btn, submit_sel)
 
-    # Wait for the post-login UI
+    # Let post-login UI render
+    page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+
+def _debug_dump(page, out_dir, name):
     try:
-        page.wait_for_selector(NAV["general_hover"], timeout=DEF_TIMEOUT)
-    except PWTimeout:
-        page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-        page.wait_for_selector(NAV["general_hover"], timeout=DEF_TIMEOUT)
+        os.makedirs(out_dir, exist_ok=True)
+        page.screenshot(path=os.path.join(out_dir, f"{name}.png"), full_page=True)
+        with open(os.path.join(out_dir, f"{name}.html"), "w", encoding="utf-8") as f:
+            f.write(page.content())
+    except Exception:
+        pass
+
+def _goto_all_reports(page):
+    """
+    Be flexible: try several paths to reach 'All Reports' without relying on hover.
+    """
+    candidates_all_reports = [
+        'text="All Reports"', 'text=All Reports', 'a:has-text("All Reports")', 'button:has-text("All Reports")'
+    ]
+    candidates_reports_menu = [
+        'text=Reports', 'a:has-text("Reports")', 'button:has-text("Reports")',
+        'text=General', 'a:has-text("General")', 'button:has-text("General")',
+    ]
+    candidates_menu_button = [
+        'button[aria-label*="menu" i]', 'button:has-text("Menu")', '.fa-bars', 'button.burger',
+    ]
+
+    # 1) If "All Reports" is directly visible anywhere, click it.
+    for sel in candidates_all_reports:
+        try:
+            if page.locator(sel).first.is_visible():
+                _click(page, sel)
+                return
+        except Exception:
+            pass
+
+    # 2) Try opening a side/hamburger menu, then click All Reports.
+    for mb in candidates_menu_button:
+        try:
+            if page.locator(mb).first.is_visible():
+                _click(page, mb)
+                page.wait_for_timeout(400)
+                for sel in candidates_all_reports:
+                    try:
+                        if page.locator(sel).first.is_visible():
+                            _click(page, sel)
+                            return
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # 3) Try clicking a "General"/"Reports" area, then All Reports.
+    for parent in candidates_reports_menu:
+        try:
+            if page.locator(parent).first.is_visible():
+                _click(page, parent)
+                page.wait_for_timeout(400)
+                for sel in candidates_all_reports:
+                    try:
+                        if page.locator(sel).first.is_visible():
+                            _click(page, sel)
+                            return
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # 4) Final attempt: search any frame for link/button text.
+    frames = [page] + page.frames
+    for f in frames:
+        try:
+            loc = f.locator('text=All Reports').first
+            if loc.count() > 0:
+                loc.click(timeout=DEF_TIMEOUT)
+                return
+        except Exception:
+            pass
+
+    raise RuntimeError("Could not find 'All Reports' after login. Update navigation selectors.")
 
 def download_all_reports(month: str, out_dir: str):
     load_dotenv()
     os.makedirs(out_dir, exist_ok=True)
     start, end = first_last_day(month)
 
-    # Support both correct and earlier env names (just in case)
-    company = os.getenv("SEMPER_COMPANY_CODE") or os.getenv("SEM­PER_COMPANY_CODE") or ""
+    company  = os.getenv("SEMPER_COMPANY_CODE") or os.getenv("SEM­PER_COMPANY_CODE") or ""
     username = os.getenv("SEMPER_USERNAME")    or os.getenv("SEM­PER_USERNAME") or ""
     password = os.getenv("SEMPER_PASSWORD")    or os.getenv("SEM­PER_PASSWORD") or ""
+    debug    = os.getenv("DEBUG", "0") == "1"
+    headful  = os.getenv("HEADFUL", "0") == "1"
 
     files = {}
-    headful = os.getenv("HEADFUL", "0") == "1"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headful)
@@ -126,62 +182,58 @@ def download_all_reports(month: str, out_dir: str):
         page = context.new_page()
 
         # Login
-        _do_login(page, company, username, password, headful=headful)
+        _do_login(page, company, username, password)
+        page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+        if debug: _debug_dump(page, out_dir, "after-login")
 
-        # Navigate to All Reports
-        _click(page, NAV["general_hover"])
-        _click(page, NAV["all_reports"])
+        # Go to All Reports (robust)
+        _goto_all_reports(page)
+        page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+        if debug: _debug_dump(page, out_dir, "after-open-all-reports")
 
-        # Room Types History & Forecast
+        # ---- Room Types History & Forecast
         _click(page, REPORTS["room_types_history_forecast"])
         _fill(page, COMMON["from_date"], start)
         _fill(page, COMMON["to_date"], end)
         _click(page, COMMON["generate"])
-        try:
-            _click(page, COMMON["no_prompt"])
-        except Exception:
-            pass
+        try: _click(page, COMMON["no_prompt"])
+        except Exception: pass
         page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
         files["history_forecast"] = _export(page, out_dir, f"{month}-history-forecast")
         _click(page, COMMON["back"])
 
-        # Transactions > User Selected
+        # ---- Transactions > User Selected
         _click(page, REPORTS["transactions_user_selected"])
         page.select_option('select[name="DataSelection"]', label="Bank Date")
         _fill(page, COMMON["from_date"], start)
         _fill(page, COMMON["to_date"], end)
         page.select_option('select[name="UserSelection"]', label="Payment Types")
         _click(page, COMMON["generate"])
-        try:
-            _click(page, COMMON["no_prompt"])
-        except Exception:
-            pass
+        try: _click(page, COMMON["no_prompt"])
+        except Exception: pass
         page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
         files["transactions_user_selected"] = _export(page, out_dir, f"{month}-transactions-user-selected")
         _click(page, COMMON["back"])
 
-        # Deposits Applied & Received
+        # ---- Deposits Applied & Received
         _click(page, REPORTS["deposits_applied_received"])
         _fill(page, COMMON["from_date"], start)
         _fill(page, COMMON["to_date"], end)
         _click(page, COMMON["generate"])
-        try:
-            _click(page, COMMON["no_prompt"])
-        except Exception:
-            pass
+        try: _click(page, COMMON["no_prompt"])
+        except Exception: pass
         page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
         files["deposits_applied_received"] = _export(page, out_dir, f"{month}-deposits-applied-received")
         _click(page, COMMON["back"])
 
-        # Income by Products Monthly (all unchecked; split later)
+        # ---- Income by Products Monthly (all unchecked; split later)
         _click(page, REPORTS["income_by_products_monthly"])
         _fill(page, COMMON["from_date"], start)
         _fill(page, COMMON["to_date"], end)
         for key in ("cb1","cb2","cb3","cb4"):
             try:
                 box = page.locator(CHECKS[key]).first
-                if box.is_checked():
-                    box.uncheck()
+                if box.is_checked(): box.uncheck()
             except Exception:
                 pass
         _click(page, COMMON["generate"])
