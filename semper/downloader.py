@@ -58,89 +58,57 @@ def _do_login(page, venue, username, password):
     page.goto(SEMPER_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
-    # --- VENUE ID (first field) ---
-    venue_filled = False
-    # 1) Best: placeholder contains "Venue"
+    # --- VENUE ID (exact placeholder match) ---
     try:
-        page.get_by_placeholder("Venue", exact=False).first.fill(str(venue), timeout=DEF_TIMEOUT)
-        venue_filled = True
+        field_venue = page.get_by_placeholder("Venue ID").first
+        field_venue.wait_for(state="visible", timeout=5000)
+        field_venue.click()
+        field_venue.fill(str(venue))
+        print("✅ Venue ID filled")
     except Exception:
-        pass
-    # 2) Fallbacks: attribute contains "venue" or "property" or "company"
-    if not venue_filled:
-        sel_venue = (
-            'input[placeholder*="venue" i], input[id*="venue" i], input[name*="venue" i], '
-            'input[placeholder*="property" i], input[id*="property" i], input[name*="property" i], '
-            'input[placeholder*="company" i], input[id*="company" i], input[name*="company" i]'
-        )
+        # fallback in case placeholder changes
         try:
-            v = page.locator(sel_venue).first
-            v.wait_for(state="visible", timeout=5000)
-            v.click()
-            v.fill(str(venue))
-            venue_filled = True
-        except Exception:
-            pass
-    # 3) Last resort: first visible non-password input
-    if not venue_filled:
-        try:
-            first_input = page.locator('input:not([type="password"]):not([type="hidden"])').filter(
-                has_not_text=""
+            field_venue = page.locator(
+                'input[placeholder*="venue" i], input[name*="venue" i], input[id*="venue" i]'
             ).first
-            first_input.wait_for(state="visible", timeout=5000)
-            first_input.click()
-            first_input.fill(str(venue))
-            venue_filled = True
-        except Exception:
-            pass
-    if not venue_filled:
-        raise RuntimeError("Could not find/fill the Venue ID field. (Check placeholder/labels.)")
+            field_venue.wait_for(state="visible", timeout=5000)
+            field_venue.fill(str(venue))
+            print("✅ Venue ID filled (fallback selector)")
+        except Exception as e:
+            raise RuntimeError(f"Could not find Venue ID field: {e}")
 
-    # --- USERNAME (second field) ---
-    user_filled = False
+    # --- USERNAME ---
     try:
-        # Try common placeholders/labels
-        page.get_by_placeholder("User", exact=False).first.fill(username, timeout=3000)
-        user_filled = True
+        field_user = page.get_by_placeholder("User", exact=False).first
+        field_user.wait_for(state="visible", timeout=5000)
+        field_user.click()
+        field_user.fill(username)
+        print("✅ Username filled")
     except Exception:
-        pass
-    if not user_filled:
-        try:
-            u = page.locator(
-                'input[name*="user" i], input[id*="user" i], '
-                'input[type="email"], input[placeholder*="email" i], input[placeholder*="user" i]'
-            ).first
-            u.wait_for(state="visible", timeout=5000)
-            u.click()
-            u.fill(username)
-            user_filled = True
-        except Exception:
-            pass
-    if not user_filled:
-        try:
-            # assume second visible input is username
-            second = page.locator('input:not([type="hidden"])').nth(1)
-            second.wait_for(state="visible", timeout=5000)
-            second.click()
-            second.fill(username)
-            user_filled = True
-        except Exception:
-            pass
-    if not user_filled:
-        raise RuntimeError("Could not find/fill the Username field.")
+        # fallback
+        field_user = page.locator(
+            'input[name*="user" i], input[id*="user" i], input[placeholder*="user" i]'
+        ).first
+        field_user.wait_for(state="visible", timeout=5000)
+        field_user.fill(username)
+        print("✅ Username filled (fallback selector)")
 
-    # --- PASSWORD (third field) ---
-    pw = page.locator('input[type="password"], input[name*="pass" i], input[id*="pass" i]').first
-    pw.wait_for(state="visible", timeout=DEF_TIMEOUT)
-    pw.click()
-    pw.fill(password)
+    # --- PASSWORD ---
+    field_pw = page.locator('input[type="password"]').first
+    field_pw.wait_for(state="visible", timeout=5000)
+    field_pw.click()
+    field_pw.fill(password)
+    print("✅ Password filled")
 
-    # --- SUBMIT ---
-    login_btn = page.locator('button:has-text("Login"), input[type="submit"], [value="Login"]').first
-    login_btn.wait_for(state="visible", timeout=DEF_TIMEOUT)
-    login_btn.click()
+    # --- LOGIN BUTTON ---
+    btn = page.locator(
+        'button:has-text("Login"), input[type="submit"], [value="Login"]'
+    ).first
+    btn.wait_for(state="visible", timeout=5000)
+    btn.click()
+    print("✅ Login clicked")
 
-    # Wait for navigation after login
+    # Wait until logged in
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
 def _debug_dump(page, out_dir, name):
