@@ -1,35 +1,18 @@
-# Resilient selectors for the Semper portal (3-input login)
-
+# FILE: semper/selectors.py
 LOGIN = {
-    # Company / Property / Site code (first field)
-    "company_any": [
-        'input[name="company"]',
-        'input[name="Company"]',
-        'input#company',
-        'input[id*="company" i]',
-        'input[placeholder*="company" i]',
-        'input[placeholder*="property" i]',
-        'input[placeholder*="site" i]',
-        'input[placeholder*="code" i]',
-        # very broad fallback (handled carefully in code)
-        'input[type="text"]',
-    ],
-    # Username (second field)
+    # we’re no longer relying on these for Venue, but keep username/password fallbacks handy
     "username_any": [
         'input[name="username"]',
         'input[name="UserName"]',
-        'input#username',
         'input[id*="user" i]',
         'input[placeholder*="user" i]',
         'input[placeholder*="email" i]',
         'input[type="email"]',
         'input[type="text"]',
     ],
-    # Password (third field)
     "password_any": [
         'input[name="password"]',
         'input[name="Password"]',
-        'input#password',
         'input[type="password"]',
         'input[placeholder*="password" i]',
     ],
@@ -38,7 +21,6 @@ LOGIN = {
         'input[type="submit"]',
         'button:has-text("Login")',
         'button:has-text("Sign in")',
-        'button:has-text("Sign In")',
     ],
 }
 
