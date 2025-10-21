@@ -7,7 +7,6 @@ from playwright.sync_api import sync_playwright
 from .selectors import REPORTS, COMMON, CHECKS
 
 SEMPER_URL = "https://web-prod.semper-services.com/auth"
-ALL_REPORTS_URL = "https://web-prod.semper-services.com/general/allreports"
 DEF_TIMEOUT = 30000  # 30s
 
 def first_last_day(month: str):
@@ -47,10 +46,7 @@ def _force_type_input(page, locator, text):
     try: locator.type(str(text), delay=40)
     except: pass
     try:
-        page.evaluate(
-            "(el, val)=>{el.value=val; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));}",
-            locator, str(text)
-        )
+        page.evaluate("(el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}", locator, str(text))
     except: pass
     try: page.keyboard.press("Tab")
     except: pass
@@ -86,54 +82,96 @@ def _do_login(page, venue, username, password, out_dir):
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, "after-login")
 
-def _goto_all_reports(page, out_dir):
-    """
-    Try direct URL → then hover-based navigation to find 'All Reports'.
-    """
-    # 1) Direct URL (fastest & most reliable)
-    page.goto(ALL_REPORTS_URL, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-    if page.locator('text=All Reports').first.count() > 0 or "allreports" in page.url:
-        _snapshot(page, out_dir, "after-open-all-reports")
-        return
+def _page_looks_blank(page) -> bool:
+    try:
+        # tiny content or body only overlay
+        txt = page.evaluate("() => document.body && document.body.innerText ? document.body.innerText.trim() : ''")
+        area = page.evaluate("() => ({w:document.documentElement.clientWidth,h:document.documentElement.clientHeight})")
+        return (len(txt) < 10) or (area and area.get('w',0) < 50)
+    except:
+        return False
 
-    # 2) Try clicking/hovering the top tabs
-    candidates_tabs = [
+def _clear_overlays(page):
+    # remove common blocking overlays/spinners
+    js = """
+    () => {
+      const kill = (sel) => document.querySelectorAll(sel).forEach(n=>n.remove());
+      kill('.modal-backdrop');
+      kill('.modal.show');
+      kill('.overlay');
+      kill('.spinner');
+      kill('.loading, .loader');
+      return true;
+    }
+    """
+    try: page.evaluate(js)
+    except: pass
+
+def _open_all_reports_via_menu(page, out_dir):
+    """
+    Use only in-app menus. Hover/click 'General' and any 'Reports' menu to reach 'All Reports'.
+    Retries with overlay clear + reload if content looks blank.
+    """
+    top_tabs = [
         'text=General', 'text=Reservations', 'text=Front Desk', 'text=Accounting',
         'text=Setup & Admin', 'text=Calendar View', 'text=Channel Management'
     ]
-    candidates_all_reports = [
-        'text="All Reports"', 'text=All Reports', 'a:has-text("All Reports")',
-        'li:has-text("All Reports")', 'button:has-text("All Reports")'
+    candidates_reports = [
+        'text=All Reports', 'a:has-text("All Reports")', 'li:has-text("All Reports")',
+        'button:has-text("All Reports")', 'text=Reports', 'a:has-text("Reports")'
     ]
 
-    # Directly visible "All Reports"
-    for sel in candidates_all_reports:
-        try:
-            loc = page.locator(sel).first
-            if loc.is_visible():
-                loc.click(timeout=DEF_TIMEOUT)
-                _snapshot(page, out_dir, "after-open-all-reports")
-                return
-        except: pass
-
-    # Hover each tab and look for "All Reports"
-    for tab in candidates_tabs:
-        try:
-            page.locator(tab).first.hover(timeout=DEF_TIMEOUT)
-            page.wait_for_timeout(250)
-            for sel in candidates_all_reports:
+    # Try “General” first
+    try:
+        t = page.locator('text=General').first
+        if t.count() > 0:
+            t.hover(timeout=DEF_TIMEOUT); page.wait_for_timeout(250)
+            for r in candidates_reports:
                 try:
-                    loc = page.locator(sel).first
+                    loc = page.locator(r).first
                     if loc.is_visible():
                         loc.click(timeout=DEF_TIMEOUT)
-                        _snapshot(page, out_dir, "after-open-all-reports")
-                        return
+                        page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+                        if not _page_looks_blank(page):
+                            _snapshot(page, out_dir, "after-open-all-reports")
+                            return
+                except: pass
+    except: pass
+
+    # Hover every tab → look for “All Reports”
+    for tab in top_tabs:
+        try:
+            page.locator(tab).first.hover(timeout=DEF_TIMEOUT)
+            page.wait_for_timeout(300)
+            for r in candidates_reports:
+                try:
+                    loc = page.locator(r).first
+                    if loc.is_visible():
+                        loc.click(timeout=DEF_TIMEOUT)
+                        page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+                        if not _page_looks_blank(page):
+                            _snapshot(page, out_dir, "after-open-all-reports")
+                            return
                 except: pass
         except: pass
 
+    # If we got a blank/spinner screen, clear overlays and retry once
+    _clear_overlays(page)
+    page.reload(wait_until="domcontentloaded"); page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+    try:
+        page.locator('text=General').first.hover(timeout=DEF_TIMEOUT)
+        page.wait_for_timeout(300)
+        loc = page.locator('text=All Reports, a:has-text("All Reports")').first
+        if loc.count() > 0:
+            loc.click(timeout=DEF_TIMEOUT)
+            page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+            if not _page_looks_blank(page):
+                _snapshot(page, out_dir, "after-open-all-reports")
+                return
+    except: pass
+
     _snapshot(page, out_dir, "could-not-find-all-reports")
-    raise RuntimeError("Could not find 'All Reports' after login.")
+    raise RuntimeError("Could not reach 'All Reports' from the top menu (page stayed blank/spinner).")
 
 def download_all_reports(month: str, out_dir: str):
     load_dotenv()
@@ -154,22 +192,16 @@ def download_all_reports(month: str, out_dir: str):
     error = None
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=not headful,
-            slow_mo=slowmo_ms if slowmo_ms > 0 else None
-        )
-        context = browser.new_context(
-            accept_downloads=True,
-            viewport={"width": 1440, "height": 900}  # ← fixed quotes
-        )
+        browser = p.chromium.launch(headless=not headful, slow_mo=slowmo_ms if slowmo_ms > 0 else None)
+        context = browser.new_context(accept_downloads=True, viewport={"width": 1440, "height": 900})
         page = context.new_page()
 
         try:
             # Login
             _do_login(page, venue, username, password, out_dir)
 
-            # Open All Reports
-            _goto_all_reports(page, out_dir)
+            # In-app navigation only (avoid direct URL that causes blank overlay)
+            _open_all_reports_via_menu(page, out_dir)
 
             # ---- Room Types History & Forecast
             _click(page, REPORTS["room_types_history_forecast"])
