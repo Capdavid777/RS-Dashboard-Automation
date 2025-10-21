@@ -58,28 +58,89 @@ def _do_login(page, venue, username, password):
     page.goto(SEMPER_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
-    # Find all visible text inputs on the page
-    inputs = page.locator('input:not([type="hidden"])').all()
-
-    # If we found 3 visible inputs, fill them in order (Venue, Username, Password)
-    if len(inputs) >= 3:
+    # --- VENUE ID (first field) ---
+    venue_filled = False
+    # 1) Best: placeholder contains "Venue"
+    try:
+        page.get_by_placeholder("Venue", exact=False).first.fill(str(venue), timeout=DEF_TIMEOUT)
+        venue_filled = True
+    except Exception:
+        pass
+    # 2) Fallbacks: attribute contains "venue" or "property" or "company"
+    if not venue_filled:
+        sel_venue = (
+            'input[placeholder*="venue" i], input[id*="venue" i], input[name*="venue" i], '
+            'input[placeholder*="property" i], input[id*="property" i], input[name*="property" i], '
+            'input[placeholder*="company" i], input[id*="company" i], input[name*="company" i]'
+        )
         try:
-            inputs[0].fill(str(venue))
-            inputs[1].fill(username)
-            inputs[2].fill(password)
-        except Exception as e:
-            raise RuntimeError(f"Unable to fill login inputs automatically: {e}")
-    else:
-        # Fallback if fewer inputs detected
-        raise RuntimeError(f"Expected 3 inputs, found {len(inputs)}. Page layout changed?")
+            v = page.locator(sel_venue).first
+            v.wait_for(state="visible", timeout=5000)
+            v.click()
+            v.fill(str(venue))
+            venue_filled = True
+        except Exception:
+            pass
+    # 3) Last resort: first visible non-password input
+    if not venue_filled:
+        try:
+            first_input = page.locator('input:not([type="password"]):not([type="hidden"])').filter(
+                has_not_text=""
+            ).first
+            first_input.wait_for(state="visible", timeout=5000)
+            first_input.click()
+            first_input.fill(str(venue))
+            venue_filled = True
+        except Exception:
+            pass
+    if not venue_filled:
+        raise RuntimeError("Could not find/fill the Venue ID field. (Check placeholder/labels.)")
 
-    # Try to find the Login button
+    # --- USERNAME (second field) ---
+    user_filled = False
+    try:
+        # Try common placeholders/labels
+        page.get_by_placeholder("User", exact=False).first.fill(username, timeout=3000)
+        user_filled = True
+    except Exception:
+        pass
+    if not user_filled:
+        try:
+            u = page.locator(
+                'input[name*="user" i], input[id*="user" i], '
+                'input[type="email"], input[placeholder*="email" i], input[placeholder*="user" i]'
+            ).first
+            u.wait_for(state="visible", timeout=5000)
+            u.click()
+            u.fill(username)
+            user_filled = True
+        except Exception:
+            pass
+    if not user_filled:
+        try:
+            # assume second visible input is username
+            second = page.locator('input:not([type="hidden"])').nth(1)
+            second.wait_for(state="visible", timeout=5000)
+            second.click()
+            second.fill(username)
+            user_filled = True
+        except Exception:
+            pass
+    if not user_filled:
+        raise RuntimeError("Could not find/fill the Username field.")
+
+    # --- PASSWORD (third field) ---
+    pw = page.locator('input[type="password"], input[name*="pass" i], input[id*="pass" i]').first
+    pw.wait_for(state="visible", timeout=DEF_TIMEOUT)
+    pw.click()
+    pw.fill(password)
+
+    # --- SUBMIT ---
     login_btn = page.locator('button:has-text("Login"), input[type="submit"], [value="Login"]').first
-    if login_btn.count() == 0:
-        raise RuntimeError("Login button not found.")
+    login_btn.wait_for(state="visible", timeout=DEF_TIMEOUT)
     login_btn.click()
 
-    # Wait until navigation completes
+    # Wait for navigation after login
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
 def _debug_dump(page, out_dir, name):
