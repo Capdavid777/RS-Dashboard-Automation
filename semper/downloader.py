@@ -111,78 +111,57 @@ def _date_modal_visible(page) -> bool:
 
 def _open_report_room_types(page, out_dir):
     """
-    Try multiple ways to open 'Room Types History and Forecast' from the RIGHT pane.
-    Save a snapshot after each attempt for visibility.
+    Open 'Room Types History and Forecast' from the RIGHT panel.
+    The right panel is the second .table-container on the page.
+    We expand the 'History & Forecast' section, then dblclick the row.
     """
-    selector = "div.table-container >> div.report:has-text('Room Types History and Forecast')"
-    page.wait_for_selector(selector, timeout=DEF_TIMEOUT)
-    el = page.locator(selector).first
-    el.scroll_into_view_if_needed()
+    # 1) Right-hand container
+    right_pane = page.locator("div.col-md-5.border.shadowbox.table-container").nth(1)
+    right_pane.wait_for(state="visible", timeout=DEF_TIMEOUT)
 
-    # Try 1: Playwright dblclick()
+    # 2) Ensure 'History & Forecast' section is expanded
+    #    (header click toggles the <section class="collapse"> below it)
     try:
-        el.dblclick(timeout=DEF_TIMEOUT)
-        page.wait_for_timeout(500)
-        if _date_modal_visible(page):
-            _snapshot(page, out_dir, "after-try1-dblclick")
-            return
-        _snapshot(page, out_dir, "no-modal-after-try1")
+        hdr = right_pane.get_by_text("History & Forecast", exact=True).first
+        hdr.scroll_into_view_if_needed()
+        hdr.click(timeout=DEF_TIMEOUT)
+        page.wait_for_timeout(300)
     except Exception:
-        _snapshot(page, out_dir, "try1-error")
+        pass  # header may already be expanded
 
-    # Try 2: forced double-click via click_count=2
+    # 3) Target just the rows inside the RIGHT pane
+    row_sel = "div.report:has-text('Room Types History and Forecast')"
+    row = right_pane.locator(row_sel).first
+
+    # If the section is still collapsed, click header once more and wait
+    if not row.is_visible():
+        try:
+            hdr = right_pane.get_by_text("History & Forecast", exact=True).first
+            hdr.click(timeout=DEF_TIMEOUT)
+            page.wait_for_timeout(300)
+        except Exception:
+            pass
+
+    # 4) Now open it: try native dblclick, then JS dblclick, then coord dblclick
+    row.scroll_into_view_if_needed()
     try:
-        el.click(click_count=2, force=True, timeout=DEF_TIMEOUT)
-        page.wait_for_timeout(500)
-        if _date_modal_visible(page):
-            _snapshot(page, out_dir, "after-try2-force-dblclick")
-            return
-        _snapshot(page, out_dir, "no-modal-after-try2")
+        row.dblclick(timeout=DEF_TIMEOUT)
     except Exception:
-        _snapshot(page, out_dir, "try2-error")
+        try:
+            page.evaluate(
+                "(el)=>{el.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true,view:window}));}",
+                row
+            )
+        except Exception:
+            box = row.bounding_box()
+            if box:
+                page.mouse.move(box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+                page.mouse.dblclick()
 
-    # Try 3: single click + Enter (some builds bind Enter to open)
-    try:
-        el.click(timeout=DEF_TIMEOUT)
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(500)
-        if _date_modal_visible(page):
-            _snapshot(page, out_dir, "after-try3-enter")
-            return
-        _snapshot(page, out_dir, "no-modal-after-try3")
-    except Exception:
-        _snapshot(page, out_dir, "try3-error")
-
-    # Try 4: JS dispatch true dblclick on the .report element
-    try:
-        page.evaluate(
-            """(el)=>{ const e=new MouseEvent('dblclick',{bubbles:true,cancelable:true,view:window}); el.dispatchEvent(e);}""",
-            el
-        )
-        page.wait_for_timeout(600)
-        if _date_modal_visible(page):
-            _snapshot(page, out_dir, "after-try4-js-dblclick")
-            return
-        _snapshot(page, out_dir, "no-modal-after-try4")
-    except Exception:
-        _snapshot(page, out_dir, "try4-error")
-
-    # Try 5: mouse double-click at element center (coordinates)
-    try:
-        box = el.bounding_box()
-        if box:
-            page.mouse.move(box["x"] + box["width"]/2, box["y"] + box["height"]/2)
-            page.mouse.dblclick()
-            page.wait_for_timeout(700)
-            if _date_modal_visible(page):
-                _snapshot(page, out_dir, "after-try5-mouse-dblclick")
-                return
-            _snapshot(page, out_dir, "no-modal-after-try5")
-    except Exception:
-        _snapshot(page, out_dir, "try5-error")
-
-    _snapshot(page, out_dir, "report-open-failed")
-    raise RuntimeError("Could not open 'Room Types History and Forecast' after 5 attempts.")
+    # 5) Confirm the date modal is up
+    sel_from = 'input[name="fromDate"], input[name="startDate"], input[placeholder*="Start" i], input[placeholder*="From" i]'
+    page.wait_for_selector(sel_from, timeout=DEF_TIMEOUT)
+    _snapshot(page, out_dir, "after-open-room-types-modal")
 
 def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
     date_from_sel = (
