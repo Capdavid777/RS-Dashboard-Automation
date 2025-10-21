@@ -45,7 +45,6 @@ def _do_login(page, venue, username, password, out_dir):
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, "after-load")
 
-    # get first 3 inputs (Venue, Username, Password)
     inputs = page.locator('form >> input:not([type="hidden"])').all()
     if len(inputs) < 3:
         inputs = page.locator('input:not([type="hidden"])').all()
@@ -70,7 +69,6 @@ def _do_login(page, venue, username, password, out_dir):
     _snapshot(page, out_dir, "after-login")
 
 def _open_all_reports_via_menu(page, out_dir):
-    # Hover top tabs until “All Reports” appears, then click
     top_tabs = [
         'text=General','text=Reservations','text=Front Desk','text=Accounting',
         'text=Setup & Admin','text=Calendar View','text=Channel Management'
@@ -78,8 +76,6 @@ def _open_all_reports_via_menu(page, out_dir):
     candidates = [
         'text=All Reports','a:has-text("All Reports")','li:has-text("All Reports")','button:has-text("All Reports")'
     ]
-
-    # already visible?
     for sel in candidates:
         try:
             loc = page.locator(sel).first
@@ -88,7 +84,6 @@ def _open_all_reports_via_menu(page, out_dir):
                 _snapshot(page, out_dir, "after-open-all-reports")
                 return
         except: pass
-
     for tab in top_tabs:
         try:
             page.locator(tab).first.hover(timeout=DEF_TIMEOUT)
@@ -103,36 +98,93 @@ def _open_all_reports_via_menu(page, out_dir):
                         return
                 except: pass
         except: pass
-
     _snapshot(page, out_dir, "could-not-find-all-reports")
     raise RuntimeError("Could not reach 'All Reports' from the top menu.")
 
-def _dblclick_report_right_panel(page, report_text, out_dir):
-    """
-    Locate the report row by its class 'report' and text, then fire a true dblclick event.
-    """
+def _date_modal_visible(page) -> bool:
     try:
-        selector = f"div.report:has-text('{report_text}')"
-        page.wait_for_selector(selector, timeout=DEF_TIMEOUT)
-        elem = page.locator(selector).first
-        elem.scroll_into_view_if_needed()
-        # Use JS dblclick to trigger Angular event binding
+        sel_from = 'input[name="fromDate"], input[name="startDate"], input[placeholder*="Start" i], input[placeholder*="From" i]'
+        sel_to   = 'input[name="toDate"],   input[name="endDate"],   input[placeholder*="End" i],   input[placeholder*="To" i]'
+        return page.locator(sel_from).first.is_visible() and page.locator(sel_to).first.is_visible()
+    except Exception:
+        return False
+
+def _open_report_room_types(page, out_dir):
+    """
+    Try multiple ways to open 'Room Types History and Forecast' from the RIGHT pane.
+    Save a snapshot after each attempt for visibility.
+    """
+    selector = "div.table-container >> div.report:has-text('Room Types History and Forecast')"
+    page.wait_for_selector(selector, timeout=DEF_TIMEOUT)
+    el = page.locator(selector).first
+    el.scroll_into_view_if_needed()
+
+    # Try 1: Playwright dblclick()
+    try:
+        el.dblclick(timeout=DEF_TIMEOUT)
+        page.wait_for_timeout(500)
+        if _date_modal_visible(page):
+            _snapshot(page, out_dir, "after-try1-dblclick")
+            return
+        _snapshot(page, out_dir, "no-modal-after-try1")
+    except Exception:
+        _snapshot(page, out_dir, "try1-error")
+
+    # Try 2: forced double-click via click_count=2
+    try:
+        el.click(click_count=2, force=True, timeout=DEF_TIMEOUT)
+        page.wait_for_timeout(500)
+        if _date_modal_visible(page):
+            _snapshot(page, out_dir, "after-try2-force-dblclick")
+            return
+        _snapshot(page, out_dir, "no-modal-after-try2")
+    except Exception:
+        _snapshot(page, out_dir, "try2-error")
+
+    # Try 3: single click + Enter (some builds bind Enter to open)
+    try:
+        el.click(timeout=DEF_TIMEOUT)
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(500)
+        if _date_modal_visible(page):
+            _snapshot(page, out_dir, "after-try3-enter")
+            return
+        _snapshot(page, out_dir, "no-modal-after-try3")
+    except Exception:
+        _snapshot(page, out_dir, "try3-error")
+
+    # Try 4: JS dispatch true dblclick on the .report element
+    try:
         page.evaluate(
-            """(el) => {
-                const evt = new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window });
-                el.dispatchEvent(evt);
-            }""",
-            elem
+            """(el)=>{ const e=new MouseEvent('dblclick',{bubbles:true,cancelable:true,view:window}); el.dispatchEvent(e);}""",
+            el
         )
-        page.wait_for_timeout(800)  # allow popup to appear
-        _snapshot(page, out_dir, "after-dblclick-report")
-        print(f"✅ Double-clicked: {report_text}")
-    except Exception as e:
-        _snapshot(page, out_dir, "report-dblclick-failed")
-        raise RuntimeError(f"Failed to double-click '{report_text}': {e}")
+        page.wait_for_timeout(600)
+        if _date_modal_visible(page):
+            _snapshot(page, out_dir, "after-try4-js-dblclick")
+            return
+        _snapshot(page, out_dir, "no-modal-after-try4")
+    except Exception:
+        _snapshot(page, out_dir, "try4-error")
+
+    # Try 5: mouse double-click at element center (coordinates)
+    try:
+        box = el.bounding_box()
+        if box:
+            page.mouse.move(box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+            page.mouse.dblclick()
+            page.wait_for_timeout(700)
+            if _date_modal_visible(page):
+                _snapshot(page, out_dir, "after-try5-mouse-dblclick")
+                return
+            _snapshot(page, out_dir, "no-modal-after-try5")
+    except Exception:
+        _snapshot(page, out_dir, "try5-error")
+
+    _snapshot(page, out_dir, "report-open-failed")
+    raise RuntimeError("Could not open 'Room Types History and Forecast' after 5 attempts.")
 
 def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
-    # Common selectors in Semper’s date/Generate modal flow
     date_from_sel = (
         'input[name="fromDate"], input[name="startDate"], input[placeholder*="Start" i], input[placeholder*="From" i]'
     )
@@ -143,26 +195,20 @@ def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
     no_sel = 'button:has-text("No"), text=No'
     export_sel = 'text=Export To Excel, a:has-text("Export To Excel"), button:has-text("Export To Excel"), button:has-text("Export")'
 
-    # Wait for date inputs to appear (the report should open in the same tab)
-    page.wait_for_selector(date_from_sel, timeout=DEF_TIMEOUT)
+    page.locator(date_from_sel).first.wait_for(state="visible", timeout=DEF_TIMEOUT)
     _force_type_input(page, page.locator(date_from_sel).first, start)
     _force_type_input(page, page.locator(date_to_sel).first, end)
 
-    # Generate
     page.locator(generate_sel).first.click(timeout=DEF_TIMEOUT)
     page.wait_for_timeout(300)
-
-    # Optional "No"
     try:
         page.locator(no_sel).first.click(timeout=1500)
     except Exception:
         pass
 
-    # Wait for export button
     page.locator(export_sel).first.wait_for(state="visible", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, f"{filename_hint}-ready-to-export")
 
-    # Download file
     with page.expect_download(timeout=120000) as dl:
         page.locator(export_sel).first.click()
     download = dl.value
@@ -196,15 +242,16 @@ def download_all_reports(month: str, out_dir: str):
 
         try:
             # 1) Login
+            page.on("console", lambda msg: print("[console]", msg.type, msg.text))
             _do_login(page, venue, username, password, out_dir)
 
             # 2) Open All Reports
             _open_all_reports_via_menu(page, out_dir)
 
-            # 3) Double-click the exact item in your screenshot
-            _dblclick_report_right_panel(page, "Room Types History and Forecast", out_dir)
+            # 3) Open the specific report (robust attempts)
+            _open_report_room_types(page, out_dir)
 
-            # 4) Fill dates, Generate → No, Export
+            # 4) Dates → Generate → No → Export
             files["history_forecast"] = _fill_dates_generate_export(
                 page, start, end, out_dir, f"{month}-history-forecast"
             )
