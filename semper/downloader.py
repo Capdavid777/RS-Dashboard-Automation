@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright
 from .selectors import REPORTS, COMMON, CHECKS
 
 SEMPER_URL = "https://web-prod.semper-services.com/auth"
+ALL_REPORTS_URL = "https://web-prod.semper-services.com/general/allreports"
 DEF_TIMEOUT = 30000  # 30s
 
 def first_last_day(month: str):
@@ -60,7 +61,7 @@ def _do_login(page, venue, username, password, out_dir):
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, "after-load")
 
-    # Grab first 3 visible inputs (Venue, Username, Password)
+    # first 3 inputs (Venue, Username, Password)
     inputs = page.locator('form >> input:not([type="hidden"])').all()
     if len(inputs) < 3:
         inputs = page.locator('input:not([type="hidden"])').all()
@@ -79,35 +80,35 @@ def _do_login(page, venue, username, password, out_dir):
     _force_type_input(page, p_inp, password)
     _snapshot(page, out_dir, "after-filling-login")
 
-    # Click Login
     btn = page.locator('button:has-text("Login"), input[type="submit"], [value="Login"]').first
     btn.wait_for(state="visible", timeout=DEF_TIMEOUT)
     btn.click()
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, "after-login")
 
-def _goto_all_reports_hover(page, out_dir):
+def _goto_all_reports(page, out_dir):
     """
-    Hover each top nav tab (General, Reservations, Front Desk, Accounting, Setup & Admin, etc.)
-    until a menu containing 'All Reports' appears, then click it.
+    Try direct URL → then hover-based navigation to find 'All Reports'.
     """
-    top_tabs = [
-        'text=General',
-        'text=Reservations',
-        'text=Front Desk',
-        'text=Accounting',
-        'text=Setup & Admin',
-        'text=Calendar View',
-        'text=Channel Management',
+    # 1) Direct URL (fastest & most reliable)
+    page.goto(ALL_REPORTS_URL, wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+    if page.locator('text=All Reports').first.count() > 0 or "allreports" in page.url:
+        _snapshot(page, out_dir, "after-open-all-reports")
+        return
+
+    # 2) Try clicking/hovering the top tabs
+    candidates_tabs = [
+        'text=General', 'text=Reservations', 'text=Front Desk', 'text=Accounting',
+        'text=Setup & Admin', 'text=Calendar View', 'text=Channel Management'
     ]
-    all_reports_candidates = [
-        'text="All Reports"', 'text=All Reports',
-        'a:has-text("All Reports")', 'li:has-text("All Reports")',
-        'button:has-text("All Reports")'
+    candidates_all_reports = [
+        'text="All Reports"', 'text=All Reports', 'a:has-text("All Reports")',
+        'li:has-text("All Reports")', 'button:has-text("All Reports")'
     ]
 
-    # Try direct (if already visible)
-    for sel in all_reports_candidates:
+    # Directly visible "All Reports"
+    for sel in candidates_all_reports:
         try:
             loc = page.locator(sel).first
             if loc.is_visible():
@@ -116,12 +117,12 @@ def _goto_all_reports_hover(page, out_dir):
                 return
         except: pass
 
-    # Hover each tab then look for "All Reports"
-    for tab in top_tabs:
+    # Hover each tab and look for "All Reports"
+    for tab in candidates_tabs:
         try:
             page.locator(tab).first.hover(timeout=DEF_TIMEOUT)
-            page.wait_for_timeout(250)  # let dropdown render
-            for sel in all_reports_candidates:
+            page.wait_for_timeout(250)
+            for sel in candidates_all_reports:
                 try:
                     loc = page.locator(sel).first
                     if loc.is_visible():
@@ -131,23 +132,8 @@ def _goto_all_reports_hover(page, out_dir):
                 except: pass
         except: pass
 
-    # One more: hover any element that has a dropdown arrow
-    try:
-        dd = page.locator('.dropdown-toggle, [data-bs-toggle="dropdown"]').first
-        if dd.count() > 0:
-            dd.hover(); page.wait_for_timeout(250)
-            for sel in all_reports_candidates:
-                try:
-                    loc = page.locator(sel).first
-                    if loc.is_visible():
-                        loc.click(timeout=DEF_TIMEOUT)
-                        _snapshot(page, out_dir, "after-open-all-reports")
-                        return
-                except: pass
-    except: pass
-
     _snapshot(page, out_dir, "could-not-find-all-reports")
-    raise RuntimeError("Could not find 'All Reports' in the top menu.")
+    raise RuntimeError("Could not find 'All Reports' after login.")
 
 def download_all_reports(month: str, out_dir: str):
     load_dotenv()
@@ -168,16 +154,22 @@ def download_all_reports(month: str, out_dir: str):
     error = None
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not headful, slow_mo=slowmo_ms if slowmo_ms > 0 else None)
-        context = browser.new_context(accept_downloads=True, viewport={"width": 1440, "height": 900"})
+        browser = p.chromium.launch(
+            headless=not headful,
+            slow_mo=slowmo_ms if slowmo_ms > 0 else None
+        )
+        context = browser.new_context(
+            accept_downloads=True,
+            viewport={"width": 1440, "height": 900}  # ← fixed quotes
+        )
         page = context.new_page()
 
         try:
             # Login
             _do_login(page, venue, username, password, out_dir)
 
-            # Reach "All Reports" via hover
-            _goto_all_reports_hover(page, out_dir)
+            # Open All Reports
+            _goto_all_reports(page, out_dir)
 
             # ---- Room Types History & Forecast
             _click(page, REPORTS["room_types_history_forecast"])
@@ -236,7 +228,7 @@ def download_all_reports(month: str, out_dir: str):
         finally:
             if keep_open:
                 print("🟢 KEEP_OPEN=1 — leaving browser open (close it when done).")
-                try: page.wait_for_timeout(3_600_000)  # 1h
+                try: page.wait_for_timeout(3_600_000)
                 except: pass
             else:
                 try: context.close()
