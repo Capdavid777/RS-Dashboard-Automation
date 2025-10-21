@@ -4,7 +4,6 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
-from .selectors import REPORTS, COMMON, CHECKS
 
 SEMPER_URL = "https://web-prod.semper-services.com/auth"
 DEF_TIMEOUT = 30000  # 30s
@@ -17,14 +16,6 @@ def first_last_day(month: str):
 
 def _click(scope, selector): scope.locator(selector).first.click(timeout=DEF_TIMEOUT)
 def _fill(scope, selector, value): scope.locator(selector).first.fill(value, timeout=DEF_TIMEOUT)
-
-def _export(page, out_dir, filename_hint):
-    with page.expect_download(timeout=60000) as dl_info:
-        _click(page, COMMON["export_excel"])
-    download = dl_info.value
-    path = os.path.join(out_dir, filename_hint + ".xlsx")
-    download.save_as(path)
-    return path
 
 def _snapshot(page, out_dir, tag):
     try:
@@ -82,96 +73,123 @@ def _do_login(page, venue, username, password, out_dir):
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, "after-login")
 
-def _page_looks_blank(page) -> bool:
-    try:
-        # tiny content or body only overlay
-        txt = page.evaluate("() => document.body && document.body.innerText ? document.body.innerText.trim() : ''")
-        area = page.evaluate("() => ({w:document.documentElement.clientWidth,h:document.documentElement.clientHeight})")
-        return (len(txt) < 10) or (area and area.get('w',0) < 50)
-    except:
-        return False
-
-def _clear_overlays(page):
-    # remove common blocking overlays/spinners
-    js = """
-    () => {
-      const kill = (sel) => document.querySelectorAll(sel).forEach(n=>n.remove());
-      kill('.modal-backdrop');
-      kill('.modal.show');
-      kill('.overlay');
-      kill('.spinner');
-      kill('.loading, .loader');
-      return true;
-    }
-    """
-    try: page.evaluate(js)
-    except: pass
-
 def _open_all_reports_via_menu(page, out_dir):
-    """
-    Use only in-app menus. Hover/click 'General' and any 'Reports' menu to reach 'All Reports'.
-    Retries with overlay clear + reload if content looks blank.
-    """
+    """Reach All Reports by hovering/clicking top menu only."""
     top_tabs = [
         'text=General', 'text=Reservations', 'text=Front Desk', 'text=Accounting',
         'text=Setup & Admin', 'text=Calendar View', 'text=Channel Management'
     ]
-    candidates_reports = [
-        'text=All Reports', 'a:has-text("All Reports")', 'li:has-text("All Reports")',
-        'button:has-text("All Reports")', 'text=Reports', 'a:has-text("Reports")'
+    candidates_all_reports = [
+        'text=All Reports', 'a:has-text("All Reports")', 'li:has-text("All Reports")', 'button:has-text("All Reports")'
     ]
 
-    # Try “General” first
-    try:
-        t = page.locator('text=General').first
-        if t.count() > 0:
-            t.hover(timeout=DEF_TIMEOUT); page.wait_for_timeout(250)
-            for r in candidates_reports:
-                try:
-                    loc = page.locator(r).first
-                    if loc.is_visible():
-                        loc.click(timeout=DEF_TIMEOUT)
-                        page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-                        if not _page_looks_blank(page):
-                            _snapshot(page, out_dir, "after-open-all-reports")
-                            return
-                except: pass
-    except: pass
+    # Already visible?
+    for sel in candidates_all_reports:
+        try:
+            if page.locator(sel).first.is_visible():
+                page.locator(sel).first.click(timeout=DEF_TIMEOUT)
+                _snapshot(page, out_dir, "after-open-all-reports")
+                return
+        except: pass
 
-    # Hover every tab → look for “All Reports”
+    # Hover each tab until All Reports appears
     for tab in top_tabs:
         try:
             page.locator(tab).first.hover(timeout=DEF_TIMEOUT)
             page.wait_for_timeout(300)
-            for r in candidates_reports:
+            for sel in candidates_all_reports:
                 try:
-                    loc = page.locator(r).first
+                    loc = page.locator(sel).first
                     if loc.is_visible():
                         loc.click(timeout=DEF_TIMEOUT)
                         page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-                        if not _page_looks_blank(page):
-                            _snapshot(page, out_dir, "after-open-all-reports")
-                            return
+                        _snapshot(page, out_dir, "after-open-all-reports")
+                        return
                 except: pass
         except: pass
 
-    # If we got a blank/spinner screen, clear overlays and retry once
-    _clear_overlays(page)
-    page.reload(wait_until="domcontentloaded"); page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-    try:
-        page.locator('text=General').first.hover(timeout=DEF_TIMEOUT)
-        page.wait_for_timeout(300)
-        loc = page.locator('text=All Reports, a:has-text("All Reports")').first
-        if loc.count() > 0:
-            loc.click(timeout=DEF_TIMEOUT)
-            page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-            if not _page_looks_blank(page):
-                _snapshot(page, out_dir, "after-open-all-reports")
-                return
-    except: pass
-
     _snapshot(page, out_dir, "could-not-find-all-reports")
-    raise RuntimeError("Could not reach 'All Reports' from the top menu (page stayed blank/spinner).")
+    raise RuntimeError("Could not reach 'All Reports' from the top menu.")
+
+def _open_report_by_name(page, name, out_dir):
+    """
+    On the 'All Reports' screen, double-click a report by its visible text on the RIGHT column.
+    If not found, use the search box, then double-click the item in the LEFT list and click 'Add >>' first.
+    """
+    # 1) Try double-click directly in the right column
+    try:
+        right_pane = page.locator('div:has-text("History & Forecast")').last
+        target = right_pane.get_by_text(name, exact=False).first
+        target.scroll_into_view_if_needed()
+        target.dblclick(timeout=DEF_TIMEOUT)
+        return
+    except Exception:
+        pass
+
+    # 2) Use the search box to find it in the left list, add to right, then double-click
+    try:
+        search = page.get_by_placeholder("Search All Reports", exact=False).first
+        search.click(); search.fill(""); search.type(name, delay=20)
+        page.wait_for_timeout(400)
+        left_item = page.locator("div").filter(has_text=name).first
+        left_item.scroll_into_view_if_needed()
+        left_item.click()
+        add_btn = page.get_by_role("button", name="Add >>", exact=False).first
+        add_btn.click()
+        page.wait_for_timeout(300)
+        # Now in the right pane—double-click it
+        right_item = page.locator("div").filter(has_text=name).nth(1)
+        right_item.scroll_into_view_if_needed()
+        right_item.dblclick(timeout=DEF_TIMEOUT)
+        return
+    except Exception:
+        _snapshot(page, out_dir, "report-not-found")
+        raise RuntimeError(f"Couldn't open report '{name}'")
+
+def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
+    """
+    Handles the standard Semper date modal → Generate → No → Export To Excel.
+    Tries multiple input names/placeholders commonly used on Semper reports.
+    """
+    # Date inputs in the popup
+    date_from_sel = (
+        'input[name="fromDate"], input[name="startDate"], input[placeholder*="Start" i], input[placeholder*="From" i]'
+    )
+    date_to_sel = (
+        'input[name="toDate"], input[name="endDate"], input[placeholder*="End" i], input[placeholder*="To" i]'
+    )
+    generate_sel = 'button:has-text("Generate"), input[type="submit"][value*="Generate"], input[type="button"][value*="Generate"]'
+    no_sel = 'button:has-text("No"), text=No'
+    export_sel = 'text=Export To Excel, a:has-text("Export To Excel"), button:has-text("Export To Excel"), button:has-text("Export")'
+
+    # Fill dates
+    page.locator(date_from_sel).first.wait_for(state="visible", timeout=DEF_TIMEOUT)
+    _force_type_input(page, page.locator(date_from_sel).first, start)
+    _force_type_input(page, page.locator(date_to_sel).first, end)
+
+    # Generate
+    page.locator(generate_sel).first.click(timeout=DEF_TIMEOUT)
+    page.wait_for_timeout(300)
+
+    # Optional "No" prompt
+    try:
+        page.locator(no_sel).first.click(timeout=2000)
+    except Exception:
+        pass
+
+    # Wait for export button
+    page.locator(export_sel).first.wait_for(state="visible", timeout=DEF_TIMEOUT)
+    _snapshot(page, out_dir, f"{filename_hint}-ready-to-export")
+
+    # Download
+    with page.expect_download(timeout=120000) as dl_info:
+        page.locator(export_sel).first.click()
+    download = dl_info.value
+    out_path = os.path.join("outputs", "raw", f"{filename_hint}.xlsx")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    download.save_as(out_path)
+    print(f"✅ Saved: {out_path}")
+    return out_path
 
 def download_all_reports(month: str, out_dir: str):
     load_dotenv()
@@ -200,57 +218,16 @@ def download_all_reports(month: str, out_dir: str):
             # Login
             _do_login(page, venue, username, password, out_dir)
 
-            # In-app navigation only (avoid direct URL that causes blank overlay)
+            # Open "All Reports"
             _open_all_reports_via_menu(page, out_dir)
 
-            # ---- Room Types History & Forecast
-            _click(page, REPORTS["room_types_history_forecast"])
-            _fill(page, COMMON["from_date"], start)
-            _fill(page, COMMON["to_date"], end)
-            _click(page, COMMON["generate"])
-            try: _click(page, COMMON["no_prompt"])
-            except: pass
-            page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
-            files["history_forecast"] = _export(page, out_dir, f"{month}-history-forecast")
-            _click(page, COMMON["back"])
+            # === 1) Room Types History and Forecast ===
+            _open_report_by_name(page, "Room Types History and Forecast", out_dir)
+            files["history_forecast"] = _fill_dates_generate_export(
+                page, start, end, out_dir, f"{month}-history-forecast"
+            )
 
-            # ---- Transactions > User Selected
-            _click(page, REPORTS["transactions_user_selected"])
-            page.select_option('select[name="DataSelection"]', label="Bank Date")
-            _fill(page, COMMON["from_date"], start)
-            _fill(page, COMMON["to_date"], end)
-            page.select_option('select[name="UserSelection"]', label="Payment Types")
-            _click(page, COMMON["generate"])
-            try: _click(page, COMMON["no_prompt"])
-            except: pass
-            page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
-            files["transactions_user_selected"] = _export(page, out_dir, f"{month}-transactions-user-selected")
-            _click(page, COMMON["back"])
-
-            # ---- Deposits Applied & Received
-            _click(page, REPORTS["deposits_applied_received"])
-            _fill(page, COMMON["from_date"], start)
-            _fill(page, COMMON["to_date"], end)
-            _click(page, COMMON["generate"])
-            try: _click(page, COMMON["no_prompt"])
-            except: pass
-            page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
-            files["deposits_applied_received"] = _export(page, out_dir, f"{month}-deposits-applied-received")
-            _click(page, COMMON["back"])
-
-            # ---- Income by Products Monthly (all unchecked; split later)
-            _click(page, REPORTS["income_by_products_monthly"])
-            _fill(page, COMMON["from_date"], start)
-            _fill(page, COMMON["to_date"], end)
-            for key in ("cb1","cb2","cb3","cb4"):
-                try:
-                    box = page.locator(CHECKS[key]).first
-                    if box.is_checked(): box.uncheck()
-                except: pass
-            _click(page, COMMON["generate"])
-            page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
-            files["income_by_products_monthly"] = _export(page, out_dir, f"{month}-income-by-products-monthly")
-            _click(page, COMMON["back"])
+            # (next reports to follow here — we’ll wire them after this succeeds)
 
         except Exception as e:
             error = e
