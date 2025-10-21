@@ -58,38 +58,28 @@ def _do_login(page, venue, username, password):
     page.goto(SEMPER_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
-    # 1) Venue ID
-    scope_venue, venue_sel = _find_in_any_frame(page, LOGIN["venue_any"])
-    if venue_sel:
-        _fill(scope_venue, venue_sel, venue)
+    # Find all visible text inputs on the page
+    inputs = page.locator('input:not([type="hidden"])').all()
+
+    # If we found 3 visible inputs, fill them in order (Venue, Username, Password)
+    if len(inputs) >= 3:
+        try:
+            inputs[0].fill(str(venue))
+            inputs[1].fill(username)
+            inputs[2].fill(password)
+        except Exception as e:
+            raise RuntimeError(f"Unable to fill login inputs automatically: {e}")
     else:
-        ti = _all_visible_text_inputs(page)
-        if not ti:
-            raise RuntimeError("No text inputs found on login page.")
-        ti[0][1].fill(venue)
+        # Fallback if fewer inputs detected
+        raise RuntimeError(f"Expected 3 inputs, found {len(inputs)}. Page layout changed?")
 
-    # 2) Username
-    scope_user, user_sel = _find_in_any_frame(page, LOGIN["username_any"])
-    if user_sel:
-        _fill(scope_user, user_sel, username)
-    else:
-        ti = _all_visible_text_inputs(page)
-        if len(ti) < 2:
-            raise RuntimeError("Username field not found.")
-        ti[1][1].fill(username)
-
-    # 3) Password
-    scope_pw, pw_sel = _find_in_any_frame(page, LOGIN["password_any"])
-    if not pw_sel:
-        raise RuntimeError("Password field not found.")
-    _fill(scope_pw, pw_sel, password)
-
-    # Submit
-    scope_btn, submit_sel = _find_in_any_frame(page, LOGIN["submit_any"])
-    if not submit_sel:
+    # Try to find the Login button
+    login_btn = page.locator('button:has-text("Login"), input[type="submit"], [value="Login"]').first
+    if login_btn.count() == 0:
         raise RuntimeError("Login button not found.")
-    _click(scope_btn, submit_sel)
+    login_btn.click()
 
+    # Wait until navigation completes
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
 def _debug_dump(page, out_dir, name):
