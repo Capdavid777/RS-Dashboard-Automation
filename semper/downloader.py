@@ -183,9 +183,11 @@ def download_all_reports(month: str, out_dir: str):
     start, end = first_last_day(month)
 
     # ✅ Read Venue ID from .env (fallback to old name if present)
-    venue    = os.getenv("SEMPER_VENUE_ID") or os.getenv("SEMPER_COMPANY_CODE") or os.getenv("SEM­PER_COMPANY_CODE") or ""
-    username = os.getenv("SEMPER_USERNAME")  or os.getenv("SEM­PER_USERNAME") or ""
-    password = os.getenv("SEMPER_PASSWORD")  or os.getenv("SEM­PER_PASSWORD") or ""
+    venue    = os.getenv("SEMPER_VENUE_ID") or os.getenv("SEMPER_COMPANY_CODE") or ""
+    username = os.getenv("SEMPER_USERNAME") or ""
+    password = os.getenv("SEMPER_PASSWORD") or ""
+    print(f"[DEBUG] Venue='{venue}'  Username='{username}'")
+    assert venue, "SEMPER_VENUE_ID is empty — set it in .env"
     debug    = os.getenv("DEBUG", "0") == "1"
     headful  = os.getenv("HEADFUL", "0") == "1"
 
