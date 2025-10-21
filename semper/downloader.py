@@ -109,44 +109,27 @@ def _open_all_reports_via_menu(page, out_dir):
 
 def _dblclick_report_right_panel(page, report_text, out_dir):
     """
-    The right panel has headers (e.g., 'History & Forecast') and items under them.
-    We aggressively locate the element by text and double-click it, with fallbacks.
+    Locate the report row by its class 'report' and text, then fire a true dblclick event.
     """
-    # 1) Most direct: find visible text anywhere and double-click
     try:
-        item = page.get_by_text(report_text, exact=True).first
-        item.scroll_into_view_if_needed()
-        item.click(button="left", click_count=2, timeout=DEF_TIMEOUT)
+        selector = f"div.report:has-text('{report_text}')"
+        page.wait_for_selector(selector, timeout=DEF_TIMEOUT)
+        elem = page.locator(selector).first
+        elem.scroll_into_view_if_needed()
+        # Use JS dblclick to trigger Angular event binding
+        page.evaluate(
+            """(el) => {
+                const evt = new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window });
+                el.dispatchEvent(evt);
+            }""",
+            elem
+        )
+        page.wait_for_timeout(800)  # allow popup to appear
         _snapshot(page, out_dir, "after-dblclick-report")
-        return
-    except Exception:
-        pass
-
-    # 2) Prefer the right column area (near 'History & Forecast')
-    try:
-        right = page.locator("xpath=//div[contains(., 'History & Forecast')]").last
-        target = right.get_by_text(report_text, exact=True).first
-        target.scroll_into_view_if_needed()
-        target.click(button="left", click_count=2, timeout=DEF_TIMEOUT)
-        _snapshot(page, out_dir, "after-dblclick-report")
-        return
-    except Exception:
-        pass
-
-    # 3) Loose (case-insensitive) match inside any right-side container
-    try:
-        target = page.locator(f"xpath=//*[contains(normalize-space(.), '{report_text}')]").first
-        box = target.bounding_box()
-        if box:
-            page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
-            page.mouse.dblclick()
-            _snapshot(page, out_dir, "after-dblclick-report")
-            return
-    except Exception:
-        pass
-
-    _snapshot(page, out_dir, "report-dblclick-failed")
-    raise RuntimeError(f"Could not double-click '{report_text}'")
+        print(f"✅ Double-clicked: {report_text}")
+    except Exception as e:
+        _snapshot(page, out_dir, "report-dblclick-failed")
+        raise RuntimeError(f"Failed to double-click '{report_text}': {e}")
 
 def _fill_dates_generate_export(page, start, end, out_dir, filename_hint):
     # Common selectors in Semper’s date/Generate modal flow
