@@ -1,0 +1,23 @@
+# month: "2025-10"   # optional; defaults to previous calendar month
+paths:
+  raw_dir: "outputs/raw"
+  working_dir: "outputs/working"
+  json_dir: "outputs/json"
+
+room_type_map:
+  "Queen": ["Queen", "Queen (Alt)"]
+  "Deluxe Studio": ["Deluxe Studio"]
+  "1 Bed": ["One Bedroom", "1 Bed", "One Bedroom City"]
+  "2 Bed": ["Two Bedroom", "2 Bed", "Two Bedroom City"]
+
+extra_income_map:
+  "Parking": ["Parking", "Basement Parking"]
+  "Laundry": ["Laundry"]
+  "Admin Fees": ["Admin Fee", "Service Fee"]
+  "Late Checkout": ["Late Checkout"]
+  "Other": ["Misc", "Other", "Mini Bar"]
+
+targets:
+  daily_revenue_target: 40519.806452
+  occupancyPct: 0.52
+  arrBreakeven: 1395
