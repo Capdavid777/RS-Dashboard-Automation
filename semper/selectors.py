@@ -1,18 +1,6 @@
-# Selectors tuned for the Semper login (Venue ID + Username + Password)
-
+# FILE: semper/selectors.py
 LOGIN = {
-    "venue_any": [
-        'input[name="venue"]',
-        'input[name="VenueID"]',
-        'input[name="venueId"]',
-        'input[id*="venue" i]',
-        'input[placeholder*="venue" i]',
-        'input[placeholder*="Venue" i]',
-        'input[placeholder*="Property" i]',
-        'input[placeholder*="Company" i]',
-        'input[placeholder*="ID" i]',
-        'input[type="text"]',
-    ],
+    # we’re no longer relying on these for Venue, but keep username/password fallbacks handy
     "username_any": [
         'input[name="username"]',
         'input[name="UserName"]',
