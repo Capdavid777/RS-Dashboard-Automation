@@ -1,35 +1,30 @@
-# Resilient selectors for the Semper portal (3-input login)
+# Selectors tuned for the Semper login (Venue ID + Username + Password)
 
 LOGIN = {
-    # Company / Property / Site code (first field)
-    "company_any": [
-        'input[name="company"]',
-        'input[name="Company"]',
-        'input#company',
-        'input[id*="company" i]',
-        'input[placeholder*="company" i]',
-        'input[placeholder*="property" i]',
-        'input[placeholder*="site" i]',
-        'input[placeholder*="code" i]',
-        # very broad fallback (handled carefully in code)
+    "venue_any": [
+        'input[name="venue"]',
+        'input[name="VenueID"]',
+        'input[name="venueId"]',
+        'input[id*="venue" i]',
+        'input[placeholder*="venue" i]',
+        'input[placeholder*="Venue" i]',
+        'input[placeholder*="Property" i]',
+        'input[placeholder*="Company" i]',
+        'input[placeholder*="ID" i]',
         'input[type="text"]',
     ],
-    # Username (second field)
     "username_any": [
         'input[name="username"]',
         'input[name="UserName"]',
-        'input#username',
         'input[id*="user" i]',
         'input[placeholder*="user" i]',
         'input[placeholder*="email" i]',
         'input[type="email"]',
         'input[type="text"]',
     ],
-    # Password (third field)
     "password_any": [
         'input[name="password"]',
         'input[name="Password"]',
-        'input#password',
         'input[type="password"]',
         'input[placeholder*="password" i]',
     ],
@@ -38,7 +33,6 @@ LOGIN = {
         'input[type="submit"]',
         'button:has-text("Login")',
         'button:has-text("Sign in")',
-        'button:has-text("Sign In")',
     ],
 }
 
