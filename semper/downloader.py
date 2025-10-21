@@ -26,111 +26,6 @@ def _export(page, out_dir, filename_hint):
     download.save_as(path)
     return path
 
-def _find_in_any_frame(page, selectors):
-    frames = [page] + page.frames
-    for sel in selectors:
-        for f in frames:
-            try:
-                loc = f.locator(sel).first
-                if loc.count() > 0:
-                    loc.wait_for(state="attached", timeout=DEF_TIMEOUT)
-                    return f, sel
-            except Exception:
-                continue
-    return None, None
-
-def _all_visible_text_inputs(page):
-    frames = [page] + page.frames
-    locs = []
-    for f in frames:
-        try:
-            for e in f.locator('input:not([type="password"])').all():
-                try:
-                    if e.is_visible():
-                        locs.append((f, e))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    return locs
-
-def _do_login(page, venue, username, password):
-    page.goto(SEMPER_URL, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-
-    # --- VENUE ID ---
-    venue_set = False
-    # 1) Exact placeholder
-    try:
-        v = page.get_by_placeholder("Venue ID").first
-        v.wait_for(state="visible", timeout=5000)
-        v.click()
-        v.fill("")                         # clear
-        v.type(str(venue), delay=40)       # type slowly
-        venue_set = True
-    except Exception:
-        pass
-    # 2) ARIA role by name
-    if not venue_set:
-        try:
-            v = page.get_by_role("textbox", name="Venue ID").first
-            v.wait_for(state="visible", timeout=5000)
-            v.click()
-            v.fill("")
-            v.type(str(venue), delay=40)
-            venue_set = True
-        except Exception:
-            pass
-    # 3) CSS fallbacks
-    if not venue_set:
-        try:
-            v = page.locator(
-                'input[placeholder*="venue" i], input[name*="venue" i], input[id*="venue" i]'
-            ).first
-            v.wait_for(state="visible", timeout=5000)
-            v.click()
-            v.fill("")
-            v.type(str(venue), delay=40)
-            venue_set = True
-        except Exception:
-            pass
-    # 4) Last-resort: first visible non-password input + JS assign (bypasses masked/controlled inputs)
-    if not venue_set:
-        try:
-            v = page.locator('input:not([type="password"]):not([type="hidden"])').first
-            v.wait_for(state="visible", timeout=5000)
-            v.click()
-            page.evaluate("(el, val) => { el.value = val; el.dispatchEvent(new Event('input', {bubbles:true})); }", v, str(venue))
-            venue_set = True
-        except Exception:
-            pass
-    if not venue_set:
-        raise RuntimeError("Could not fill the Venue ID field.")
-
-    # --- USERNAME ---
-    u = None
-    for sel in [
-        lambda: page.get_by_placeholder("User", exact=False).first,
-        lambda: page.locator('input[name*="user" i], input[id*="user" i], input[placeholder*="user" i], input[type="email"]').first,
-        lambda: page.locator('input:not([type="hidden"]):not([type="password"])').nth(1),
-    ]:
-        try:
-            u = sel()
-            u.wait_for(state="visible", timeout=5000); u.click(); u.fill(""); u.type(username, delay=30); break
-        except Exception:
-            u = None
-    if u is None:
-        raise RuntimeError("Could not fill the Username field.")
-
-    # --- PASSWORD ---
-    p = page.locator('input[type="password"]').first
-    p.wait_for(state="visible", timeout=5000); p.click(); p.fill(""); p.type(password, delay=30)
-
-    # --- LOGIN ---
-    btn = page.locator('button:has-text("Login"), input[type="submit"], [value="Login"]').first
-    btn.wait_for(state="visible", timeout=5000); btn.click()
-    page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-
 def _debug_dump(page, out_dir, name):
     try:
         os.makedirs(out_dir, exist_ok=True)
@@ -197,19 +92,85 @@ def _goto_all_reports(page):
 
     raise RuntimeError("Could not find 'All Reports' after login. Update navigation selectors.")
 
+def _force_type_input(page, locator, text):
+    """Make absolutely sure a text lands in the input (handles 'controlled' inputs)."""
+    locator.wait_for(state="visible", timeout=DEF_TIMEOUT)
+    locator.click()
+    try:
+        page.keyboard.press("Control+A")
+    except Exception:
+        pass
+    try:
+        locator.fill("")  # clear if allowed
+    except Exception:
+        pass
+    try:
+        locator.type(str(text), delay=40)
+    except Exception:
+        pass
+    # Also set via JS + dispatch input/change
+    try:
+        page.evaluate(
+            "(el, val) => { el.value = val; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }",
+            locator, str(text)
+        )
+    except Exception:
+        pass
+    # Tab out to trigger validation
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    page.wait_for_timeout(200)
+
+def _do_login(page, venue, username, password, debug=False, out_dir="outputs/raw"):
+    page.goto(SEMPER_URL, wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+
+    # Collect visible inputs (DOM order). Expecting: 0=Venue, 1=Username, 2=Password
+    inputs = page.locator('input:not([type="hidden"])').filter(has_not_text="").all()
+    if len(inputs) < 3:
+        # Try within a <form>
+        inputs = page.locator('form >> input:not([type="hidden"])').all()
+    if len(inputs) < 3:
+        raise RuntimeError(f"Login page did not expose 3 inputs (found {len(inputs)}).")
+
+    v_inp, u_inp, p_inp = inputs[0], inputs[1], None
+    # Password: explicit selector (in case DOM order differs)
+    try:
+        p_inp = page.locator('input[type="password"]').first
+    except Exception:
+        p_inp = inputs[2]
+
+    # Fill them forcefully
+    _force_type_input(page, v_inp, venue)
+    _force_type_input(page, u_inp, username)
+    _force_type_input(page, p_inp, password)
+
+    if debug:
+        _debug_dump(page, out_dir, "after-filling-login")
+
+    # Click the Login button
+    btn = page.locator('button:has-text("Login"), input[type="submit"], [value="Login"]').first
+    btn.wait_for(state="visible", timeout=DEF_TIMEOUT)
+    btn.click()
+
+    page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+
 def download_all_reports(month: str, out_dir: str):
     load_dotenv()
     os.makedirs(out_dir, exist_ok=True)
     start, end = first_last_day(month)
 
-    # ✅ Read Venue ID from .env (fallback to old name if present)
+    # Read creds (Venue ID is required)
     venue    = os.getenv("SEMPER_VENUE_ID") or os.getenv("SEMPER_COMPANY_CODE") or ""
     username = os.getenv("SEMPER_USERNAME") or ""
     password = os.getenv("SEMPER_PASSWORD") or ""
-    print(f"[DEBUG] Venue='{venue}'  Username='{username}'")
-    assert venue, "SEMPER_VENUE_ID is empty — set it in .env"
-    debug    = os.getenv("DEBUG", "0") == "1"
     headful  = os.getenv("HEADFUL", "0") == "1"
+    debug    = os.getenv("DEBUG", "0") == "1"
+
+    if not venue:
+        raise RuntimeError("SEMPER_VENUE_ID is empty. Set it in your .env")
 
     files = {}
 
@@ -218,14 +179,12 @@ def download_all_reports(month: str, out_dir: str):
         context = browser.new_context(accept_downloads=True, viewport={"width": 1440, "height": 900})
         page = context.new_page()
 
-        # Login with Venue ID
-        _do_login(page, venue, username, password)
-        page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
+        # Login (index-based, force-typing)
+        _do_login(page, venue, username, password, debug=debug, out_dir=out_dir)
         if debug: _debug_dump(page, out_dir, "after-login")
 
-        # Go to All Reports
+        # Navigate to All Reports
         _goto_all_reports(page)
-        page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
         if debug: _debug_dump(page, out_dir, "after-open-all-reports")
 
         # ---- Room Types History & Forecast
