@@ -52,37 +52,43 @@ def _all_visible_text_inputs(page):
             pass
     return locs
 
-def _do_login(page, company, username, password):
+def _do_login(page, venue, username, password):
     page.goto(SEMPER_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
-    # 1) Company / property code
-    scope_co, co_sel = _find_in_any_frame(page, LOGIN["company_any"])
-    if co_sel: _fill(scope_co, co_sel, company)
+    # 1) Venue ID
+    scope_venue, venue_sel = _find_in_any_frame(page, LOGIN["venue_any"])
+    if venue_sel:
+        _fill(scope_venue, venue_sel, venue)
     else:
         ti = _all_visible_text_inputs(page)
-        if not ti: raise RuntimeError("No visible text inputs on login page.")
-        ti[0][1].fill(company)
+        if not ti:
+            raise RuntimeError("No text inputs found on login page.")
+        ti[0][1].fill(venue)
 
     # 2) Username
     scope_user, user_sel = _find_in_any_frame(page, LOGIN["username_any"])
-    if user_sel: _fill(scope_user, user_sel, username)
+    if user_sel:
+        _fill(scope_user, user_sel, username)
     else:
         ti = _all_visible_text_inputs(page)
-        if len(ti) < 2: raise RuntimeError("Username field not found.")
+        if len(ti) < 2:
+            raise RuntimeError("Username field not found.")
         ti[1][1].fill(username)
 
     # 3) Password
     scope_pw, pw_sel = _find_in_any_frame(page, LOGIN["password_any"])
-    if not pw_sel: raise RuntimeError("Password field not found.")
+    if not pw_sel:
+        raise RuntimeError("Password field not found.")
     _fill(scope_pw, pw_sel, password)
 
     # Submit
     scope_btn, submit_sel = _find_in_any_frame(page, LOGIN["submit_any"])
-    if not submit_sel: raise RuntimeError("Login button not found.")
+    if not submit_sel:
+        raise RuntimeError("Login button not found.")
     _click(scope_btn, submit_sel)
 
-    # Let post-login UI render
+    # Wait for the post-login dashboard or menu
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
 def _debug_dump(page, out_dir, name):
