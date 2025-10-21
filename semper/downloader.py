@@ -1,3 +1,4 @@
+# FILE: semper/downloader.py
 import os
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -45,7 +46,8 @@ def _all_visible_text_inputs(page):
         try:
             for e in f.locator('input:not([type="password"])').all():
                 try:
-                    if e.is_visible(): locs.append((f, e))
+                    if e.is_visible():
+                        locs.append((f, e))
                 except Exception:
                     pass
         except Exception:
@@ -88,7 +90,6 @@ def _do_login(page, venue, username, password):
         raise RuntimeError("Login button not found.")
     _click(scope_btn, submit_sel)
 
-    # Wait for the post-login dashboard or menu
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
 
 def _debug_dump(page, out_dir, name):
@@ -101,9 +102,7 @@ def _debug_dump(page, out_dir, name):
         pass
 
 def _goto_all_reports(page):
-    """
-    Be flexible: try several paths to reach 'All Reports' without relying on hover.
-    """
+    # Flexible navigation to "All Reports"
     candidates_all_reports = [
         'text="All Reports"', 'text=All Reports', 'a:has-text("All Reports")', 'button:has-text("All Reports")'
     ]
@@ -115,55 +114,45 @@ def _goto_all_reports(page):
         'button[aria-label*="menu" i]', 'button:has-text("Menu")', '.fa-bars', 'button.burger',
     ]
 
-    # 1) If "All Reports" is directly visible anywhere, click it.
     for sel in candidates_all_reports:
         try:
             if page.locator(sel).first.is_visible():
-                _click(page, sel)
-                return
+                _click(page, sel); return
         except Exception:
             pass
 
-    # 2) Try opening a side/hamburger menu, then click All Reports.
     for mb in candidates_menu_button:
         try:
             if page.locator(mb).first.is_visible():
-                _click(page, mb)
-                page.wait_for_timeout(400)
+                _click(page, mb); page.wait_for_timeout(400)
                 for sel in candidates_all_reports:
                     try:
                         if page.locator(sel).first.is_visible():
-                            _click(page, sel)
-                            return
+                            _click(page, sel); return
                     except Exception:
                         pass
         except Exception:
             pass
 
-    # 3) Try clicking a "General"/"Reports" area, then All Reports.
     for parent in candidates_reports_menu:
         try:
             if page.locator(parent).first.is_visible():
-                _click(page, parent)
-                page.wait_for_timeout(400)
+                _click(page, parent); page.wait_for_timeout(400)
                 for sel in candidates_all_reports:
                     try:
                         if page.locator(sel).first.is_visible():
-                            _click(page, sel)
-                            return
+                            _click(page, sel); return
                     except Exception:
                         pass
         except Exception:
             pass
 
-    # 4) Final attempt: search any frame for link/button text.
     frames = [page] + page.frames
     for f in frames:
         try:
             loc = f.locator('text=All Reports').first
             if loc.count() > 0:
-                loc.click(timeout=DEF_TIMEOUT)
-                return
+                loc.click(timeout=DEF_TIMEOUT); return
         except Exception:
             pass
 
@@ -174,9 +163,10 @@ def download_all_reports(month: str, out_dir: str):
     os.makedirs(out_dir, exist_ok=True)
     start, end = first_last_day(month)
 
-    company  = os.getenv("SEMPER_COMPANY_CODE") or os.getenv("SEM­PER_COMPANY_CODE") or ""
-    username = os.getenv("SEMPER_USERNAME")    or os.getenv("SEM­PER_USERNAME") or ""
-    password = os.getenv("SEMPER_PASSWORD")    or os.getenv("SEM­PER_PASSWORD") or ""
+    # ✅ Read Venue ID from .env (fallback to old name if present)
+    venue    = os.getenv("SEMPER_VENUE_ID") or os.getenv("SEMPER_COMPANY_CODE") or os.getenv("SEM­PER_COMPANY_CODE") or ""
+    username = os.getenv("SEMPER_USERNAME")  or os.getenv("SEM­PER_USERNAME") or ""
+    password = os.getenv("SEMPER_PASSWORD")  or os.getenv("SEM­PER_PASSWORD") or ""
     debug    = os.getenv("DEBUG", "0") == "1"
     headful  = os.getenv("HEADFUL", "0") == "1"
 
@@ -187,12 +177,12 @@ def download_all_reports(month: str, out_dir: str):
         context = browser.new_context(accept_downloads=True, viewport={"width": 1440, "height": 900})
         page = context.new_page()
 
-        # Login
-        _do_login(page, company, username, password)
+        # Login with Venue ID
+        _do_login(page, venue, username, password)
         page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
         if debug: _debug_dump(page, out_dir, "after-login")
 
-        # Go to All Reports (robust)
+        # Go to All Reports
         _goto_all_reports(page)
         page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
         if debug: _debug_dump(page, out_dir, "after-open-all-reports")
