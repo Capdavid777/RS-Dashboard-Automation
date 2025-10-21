@@ -4,7 +4,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
-from .selectors import LOGIN, NAV, REPORTS, COMMON, CHECKS
+from .selectors import REPORTS, COMMON, CHECKS
 
 SEMPER_URL = "https://web-prod.semper-services.com/auth"
 DEF_TIMEOUT = 30000  # 30s
@@ -32,84 +32,28 @@ def _snapshot(page, out_dir, tag):
         page.screenshot(path=os.path.join(out_dir, f"{tag}.png"), full_page=True)
         with open(os.path.join(out_dir, f"{tag}.html"), "w", encoding="utf-8") as f:
             f.write(page.content())
-        print(f"📸 snapshot: {tag}")
+        print(f"📸 {tag}")
     except Exception as e:
-        print(f"[WARN] snapshot failed ({tag}): {e}")
-
-def _goto_all_reports(page):
-    # Try several routes to “All Reports”
-    candidates_all_reports = [
-        'text="All Reports"', 'text=All Reports',
-        'a:has-text("All Reports")', 'button:has-text("All Reports")'
-    ]
-    candidates_reports_menu = [
-        'text=Reports', 'a:has-text("Reports")', 'button:has-text("Reports")',
-        'text=General', 'a:has-text("General")', 'button:has-text("General")'
-    ]
-    candidates_menu_button = [
-        'button[aria-label*="menu" i]', 'button:has-text("Menu")', '.fa-bars', 'button.burger'
-    ]
-
-    # Direct
-    for sel in candidates_all_reports:
-        try:
-            if page.locator(sel).first.is_visible():
-                _click(page, sel); return
-        except Exception: pass
-
-    # Hamburger then All Reports
-    for mb in candidates_menu_button:
-        try:
-            if page.locator(mb).first.is_visible():
-                _click(page, mb); page.wait_for_timeout(400)
-                for sel in candidates_all_reports:
-                    try:
-                        if page.locator(sel).first.is_visible():
-                            _click(page, sel); return
-                    except Exception: pass
-        except Exception: pass
-
-    # Click a parent then All Reports
-    for parent in candidates_reports_menu:
-        try:
-            if page.locator(parent).first.is_visible():
-                _click(page, parent); page.wait_for_timeout(400)
-                for sel in candidates_all_reports:
-                    try:
-                        if page.locator(sel).first.is_visible():
-                            _click(page, sel); return
-                    except Exception: pass
-        except Exception: pass
-
-    # Search any frame
-    frames = [page] + page.frames
-    for f in frames:
-        try:
-            loc = f.locator('text=All Reports').first
-            if loc.count() > 0:
-                loc.click(timeout=DEF_TIMEOUT); return
-        except Exception: pass
-
-    raise RuntimeError("Could not find 'All Reports' after login.")
+        print(f"[WARN] snapshot {tag} failed: {e}")
 
 def _force_type_input(page, locator, text):
     locator.wait_for(state="visible", timeout=DEF_TIMEOUT)
     locator.click()
     try: page.keyboard.press("Control+A")
-    except Exception: pass
+    except: pass
     try: locator.fill("")
-    except Exception: pass
+    except: pass
     try: locator.type(str(text), delay=40)
-    except Exception: pass
+    except: pass
     try:
         page.evaluate(
             "(el, val)=>{el.value=val; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));}",
             locator, str(text)
         )
-    except Exception: pass
+    except: pass
     try: page.keyboard.press("Tab")
-    except Exception: pass
-    page.wait_for_timeout(150)
+    except: pass
+    page.wait_for_timeout(120)
 
 def _do_login(page, venue, username, password, out_dir):
     page.goto(SEMPER_URL, wait_until="domcontentloaded")
@@ -127,7 +71,7 @@ def _do_login(page, venue, username, password, out_dir):
     v_inp, u_inp = inputs[0], inputs[1]
     try:
         p_inp = page.locator('input[type="password"]').first
-    except Exception:
+    except:
         p_inp = inputs[2]
 
     _force_type_input(page, v_inp, venue)
@@ -142,6 +86,69 @@ def _do_login(page, venue, username, password, out_dir):
     page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
     _snapshot(page, out_dir, "after-login")
 
+def _goto_all_reports_hover(page, out_dir):
+    """
+    Hover each top nav tab (General, Reservations, Front Desk, Accounting, Setup & Admin, etc.)
+    until a menu containing 'All Reports' appears, then click it.
+    """
+    top_tabs = [
+        'text=General',
+        'text=Reservations',
+        'text=Front Desk',
+        'text=Accounting',
+        'text=Setup & Admin',
+        'text=Calendar View',
+        'text=Channel Management',
+    ]
+    all_reports_candidates = [
+        'text="All Reports"', 'text=All Reports',
+        'a:has-text("All Reports")', 'li:has-text("All Reports")',
+        'button:has-text("All Reports")'
+    ]
+
+    # Try direct (if already visible)
+    for sel in all_reports_candidates:
+        try:
+            loc = page.locator(sel).first
+            if loc.is_visible():
+                loc.click(timeout=DEF_TIMEOUT)
+                _snapshot(page, out_dir, "after-open-all-reports")
+                return
+        except: pass
+
+    # Hover each tab then look for "All Reports"
+    for tab in top_tabs:
+        try:
+            page.locator(tab).first.hover(timeout=DEF_TIMEOUT)
+            page.wait_for_timeout(250)  # let dropdown render
+            for sel in all_reports_candidates:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.is_visible():
+                        loc.click(timeout=DEF_TIMEOUT)
+                        _snapshot(page, out_dir, "after-open-all-reports")
+                        return
+                except: pass
+        except: pass
+
+    # One more: hover any element that has a dropdown arrow
+    try:
+        dd = page.locator('.dropdown-toggle, [data-bs-toggle="dropdown"]').first
+        if dd.count() > 0:
+            dd.hover(); page.wait_for_timeout(250)
+            for sel in all_reports_candidates:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.is_visible():
+                        loc.click(timeout=DEF_TIMEOUT)
+                        _snapshot(page, out_dir, "after-open-all-reports")
+                        return
+                except: pass
+    except: pass
+
+    _snapshot(page, out_dir, "could-not-find-all-reports")
+    raise RuntimeError("Could not find 'All Reports' in the top menu.")
+
 def download_all_reports(month: str, out_dir: str):
     load_dotenv()
     os.makedirs(out_dir, exist_ok=True)
@@ -151,29 +158,26 @@ def download_all_reports(month: str, out_dir: str):
     username = os.getenv("SEMPER_USERNAME") or ""
     password = os.getenv("SEMPER_PASSWORD") or ""
     headful  = os.getenv("HEADFUL", "0") == "1"
-    debug    = os.getenv("DEBUG", "0") == "1"
     keep_open = os.getenv("KEEP_OPEN", "0") == "1"
     slowmo_ms = int(os.getenv("SLOWMO_MS", "0"))
 
     if not venue:
-        raise RuntimeError("SEMPER_VENUE_ID is empty. Set it in your .env")
+        raise RuntimeError("SEMPER_VENUE_ID is empty. Set it in .env")
 
     files = {}
     error = None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headful, slow_mo=slowmo_ms if slowmo_ms > 0 else None)
-        context = browser.new_context(accept_downloads=True, viewport={"width": 1440, "height": 900})
+        context = browser.new_context(accept_downloads=True, viewport={"width": 1440, "height": 900"})
         page = context.new_page()
 
         try:
             # Login
             _do_login(page, venue, username, password, out_dir)
 
-            # Navigate to All Reports
-            _goto_all_reports(page)
-            page.wait_for_load_state("networkidle", timeout=DEF_TIMEOUT)
-            _snapshot(page, out_dir, "after-open-all-reports")
+            # Reach "All Reports" via hover
+            _goto_all_reports_hover(page, out_dir)
 
             # ---- Room Types History & Forecast
             _click(page, REPORTS["room_types_history_forecast"])
@@ -181,7 +185,7 @@ def download_all_reports(month: str, out_dir: str):
             _fill(page, COMMON["to_date"], end)
             _click(page, COMMON["generate"])
             try: _click(page, COMMON["no_prompt"])
-            except Exception: pass
+            except: pass
             page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
             files["history_forecast"] = _export(page, out_dir, f"{month}-history-forecast")
             _click(page, COMMON["back"])
@@ -194,7 +198,7 @@ def download_all_reports(month: str, out_dir: str):
             page.select_option('select[name="UserSelection"]', label="Payment Types")
             _click(page, COMMON["generate"])
             try: _click(page, COMMON["no_prompt"])
-            except Exception: pass
+            except: pass
             page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
             files["transactions_user_selected"] = _export(page, out_dir, f"{month}-transactions-user-selected")
             _click(page, COMMON["back"])
@@ -205,7 +209,7 @@ def download_all_reports(month: str, out_dir: str):
             _fill(page, COMMON["to_date"], end)
             _click(page, COMMON["generate"])
             try: _click(page, COMMON["no_prompt"])
-            except Exception: pass
+            except: pass
             page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
             files["deposits_applied_received"] = _export(page, out_dir, f"{month}-deposits-applied-received")
             _click(page, COMMON["back"])
@@ -218,7 +222,7 @@ def download_all_reports(month: str, out_dir: str):
                 try:
                     box = page.locator(CHECKS[key]).first
                     if box.is_checked(): box.uncheck()
-                except Exception: pass
+                except: pass
             _click(page, COMMON["generate"])
             page.wait_for_selector(COMMON["export_excel"], timeout=DEF_TIMEOUT)
             files["income_by_products_monthly"] = _export(page, out_dir, f"{month}-income-by-products-monthly")
@@ -231,17 +235,14 @@ def download_all_reports(month: str, out_dir: str):
 
         finally:
             if keep_open:
-                print("🟢 KEEP_OPEN is on. Leaving the browser open for inspection (up to 1 hour).")
-                print("Close the window when you’re done.")
-                try:
-                    page.wait_for_timeout(3_600_000)  # 1 hour
-                except Exception:
-                    pass
+                print("🟢 KEEP_OPEN=1 — leaving browser open (close it when done).")
+                try: page.wait_for_timeout(3_600_000)  # 1h
+                except: pass
             else:
                 try: context.close()
-                except Exception: pass
+                except: pass
                 try: browser.close()
-                except Exception: pass
+                except: pass
 
         if error:
             raise error
